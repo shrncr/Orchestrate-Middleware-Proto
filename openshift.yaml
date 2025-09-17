@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proto-wa-service-env
+data:
+  WA_SERVICE_URL:xxxxxx
+  WA_ENV_ID:xxxx
+  CP4D_AUTH_URL:https://{cpd_url}/icp4d-api/v1/authorize
+  CP4D_USERNAME:xxx
+  CP4D_PASSWORD:xxx
+  ACCESS_TOKEN:xxxx
+  SERVER_URL:http://127.0.0.1:3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proto-wa-service
+spec:
+  selector:
+    app: proto-wa-service
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: proto-wa-service
+spec:
+  to:
+    kind: Service
+    name: proto-wa-service
+    weight: 100
+  port:
+    targetPort: 3000
+  wildcardPolicy: None
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proto-wa-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proto-wa-service
+  template:
+    metadata:
+      labels:
+        app: proto-wa-service
+    spec:
+      containers:
+        - name: proto-wa-service
+          image: quay.io/rj-neuralseek/proto-wa-middleware:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: proto-wa-service-env
