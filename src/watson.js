@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { createParser } = require('eventsource-parser');
-require("dotenv").config({ path: "../.env" });
+//require("dotenv").config({ path: "../.env" });
 
 const watson = {};
 
