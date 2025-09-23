@@ -1,7 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-//require("dotenv").config({ path: "./.env" });
-
 const { watson } = require('./watson');
 
 var SESSION_ID_MAPPING = {};
@@ -16,13 +14,20 @@ app.get('/', (req, res) => {
   res.status(200).send('OK');
 });
 
+// Stream endpoint as shown in the documentation
+app.post("/stream-hello", authenticateBearerToken, async (req, res) => {
+  console.log("/stream-hello endpoint called");
+  await streamResponse(req, res);
+});
+
+// Your existing endpoints
 app.post("/api/generate/:avatarName", authenticateBearerToken, async (req, res) => {
-  console.log("/api/generate/:avatarName")
+  console.log("/api/generate/:avatarName");
   await generate(req, res);
 });
 
 app.post("/api/generate", authenticateBearerToken, async (req, res) => {
-  console.log("/api/generate")
+  console.log("/api/generate");
   await generate(req, res);
 });
 
@@ -40,6 +45,93 @@ function authenticateBearerToken(req, res, next) {
   next();
 }
 
+// New streamResponse function specifically for avatar service
+async function streamResponse(req, res) {
+  const conversation = req.body.conversation ?? [];
+  const session_id = req.body.session_id ?? "";
+
+  try {
+    if (!session_id) {
+      res.status(400).json({ error: "Session ID cannot be blank" });
+      return;
+    }
+
+    const msg = conversation.at(-1);
+    if (!msg) {
+      res.status(400).json({ error: "Could not read last message in the conversation" });
+      return;
+    }
+    if (msg.role != "user") {
+      res.status(400).json({ error: "Last message in the conversation must be from the user" });
+      return;
+    }
+    const message = msg.content;
+    if (!message) {
+      res.status(400).json({ error: "Last message in the conversation must not be blank" });
+      return;
+    }
+
+    // Set headers for streaming as per avatar service documentation
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    let hasStreamedContent = false;
+    
+    // Stream the Watson response
+    await watson.streamMessage(session_id, message, function (data) {
+      // Handle message.delta events (streaming chunks)
+      if (data.event === 'message.delta') {
+        if (data.data?.delta?.content) {
+          const deltaContent = data.data.delta.content;
+          if (Array.isArray(deltaContent)) {
+            for (const item of deltaContent) {
+              if (item.response_type === 'text' && item.text) {
+                // Write each chunk immediately to the avatar service
+                res.write(item.text);
+                hasStreamedContent = true;
+                
+                // Optional: Add small delay to ensure proper chunking
+                // This can help with avatar synchronization
+                // setTimeout(() => {}, 10);
+              }
+            }
+          }
+        }
+      }
+      
+      // Handle message.created events (complete messages) - fallback if no streaming
+      else if (data.event === 'message.created' && !hasStreamedContent) {
+        if (data.data?.message?.content) {
+          const messageContent = data.data.message.content;
+          if (Array.isArray(messageContent)) {
+            for (const item of messageContent) {
+              if (item.response_type === 'text' && item.text) {
+                // Send the complete message if no streaming occurred
+                res.write(item.text);
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // End the stream
+    res.end();
+
+  } catch (error) {
+    console.error("Stream error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    } else {
+      // If headers already sent, just end the stream
+      res.end();
+    }
+  }
+}
+
+// Your existing generate function (kept for backward compatibility)
 async function generate(req, res) {
   const avatarName = req.params?.avatarName ?? "";
   const conversation = req.body.conversation ?? [];
@@ -71,20 +163,14 @@ async function generate(req, res) {
 
     let response = "";
     
-    // Pass session_id as the first parameter, message as second
     await watson.streamMessage(session_id, message, function (data) {
-      // console.log('=== Handler called with data ===');
-      // console.log('Event:', data.event);
-      
       // Handle message.delta events (streaming chunks)
       if (data.event === 'message.delta') {
-        //console.log('Processing message.delta event');
         if (data.data?.delta?.content) {
           const deltaContent = data.data.delta.content;
           if (Array.isArray(deltaContent)) {
             for (const item of deltaContent) {
               if (item.response_type === 'text' && item.text) {
-                //console.log('Writing delta text:', item.text);
                 res.write(item.text);
                 response += item.text;
               }
@@ -95,16 +181,13 @@ async function generate(req, res) {
       
       // Handle message.created events (complete messages)
       else if (data.event === 'message.created') {
-        //console.log('Processing message.created event');
         if (data.data?.message?.content) {
           const messageContent = data.data.message.content;
           if (Array.isArray(messageContent)) {
             for (const item of messageContent) {
               if (item.response_type === 'text' && item.text) {
-                //console.log('Found complete message text:', item.text);
                 // Only write if this is different from what we've already streamed
                 if (item.text !== response) {
-                  //console.log('Writing complete message (different from streamed):', item.text);
                   if (response) {
                     res.write('\n');
                   }
@@ -118,8 +201,6 @@ async function generate(req, res) {
           }
         }
       }
-      
-      //console.log('=== End handler ===');
     });
 
     res.end();

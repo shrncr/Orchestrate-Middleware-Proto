@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { createParser } = require('eventsource-parser');
-//require("dotenv").config({ path: "../.env" });
+require("dotenv").config({ path: "../.env" });
 
 const watson = {};
 
@@ -21,121 +21,148 @@ watson.getAuthToken = async function () {
 
 // Step 2: Stream a message to the Orchestrate endpoint
 watson.streamMessage = async function (sessionId, messageInput, handler) {
-  // console.log('=== Starting streamMessage ===');
-  // console.log('Session ID:', sessionId);
-  // console.log('Message Input:', messageInput);
-  
   const token = await watson.getAuthToken();
-  const service_url = process.env.WO_SERVICE_URL
-  const agent_id = process.env.AGENT_ID
+  const service_url = process.env.WO_SERVICE_URL;
+  const agent_id = process.env.AGENT_ID;
 
-  const res = await axios.post(
-    `${service_url}/v1/orchestrate/runs/stream`,
-    { 
-      "agent_id": agent_id,
-      "version": 1,
-      "message": {
-        "role": "user",
-        "content": messageInput
+  try {
+    const res = await axios.post(
+      `${service_url}/v1/orchestrate/runs/stream`,
+      { 
+        "agent_id": agent_id,
+        "version": 1,
+        "message": {
+          "role": "user",
+          "content": messageInput
+        },
+        "llm_params": {
+          "max_tokens": 300,
+          "temperature": 0.7,
+          "top_p": 0.95
+        },
+        "context": {
+          "department": "Finance",
+          "language": "en"
+        },
+        "context_variables": {
+          "wxo_email_id": "user@example.com",
+          "wxo_user_name": "John Doe"
+        },
+        "additional_parameters": {
+          "return_citations": true
+        }
       },
-      "llm_params": {
-        "max_tokens": 300,
-        "temperature": 0.7,
-        "top_p": 0.95
-      },
-      "context": {
-        "department": "Finance",
-        "language": "en"
-      },
-      "context_variables": {
-        "wxo_email_id": "user@example.com",
-        "wxo_user_name": "John Doe"
-      },
-      "additional_parameters": {
-        "return_citations": true
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: 'stream',
+        timeout: 60000 // 60 second timeout
       }
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      responseType: 'stream'
-    }
-  );
+    );
 
-  // console.log('=== Response received, starting to process stream ===');
-
-  let buffer = '';
-  let chunkCount = 0;
-  
-  for await (const chunk of res.data) {
-    chunkCount++;
-    const chunkStr = chunk.toString('utf-8');
-    // console.log(`=== Raw Chunk ${chunkCount} ===`);
-    // console.log(chunkStr);
-    // console.log('=== End Raw Chunk ===');
+    let buffer = '';
+    let chunkCount = 0;
+    let lastProcessedIndex = 0;
     
-    buffer += chunkStr;
-    
-    // Try to extract complete JSON objects from the buffer
-    let startIndex = 0;
-    let braceCount = 0;
-    let inString = false;
-    let escaped = false;
-    
-    for (let i = 0; i < buffer.length; i++) {
-      const char = buffer[i];
+    // Process the streaming response
+    res.data.on('data', (chunk) => {
+      chunkCount++;
+      const chunkStr = chunk.toString('utf-8');
+      buffer += chunkStr;
       
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      
-      if (char === '\\' && inString) {
-        escaped = true;
-        continue;
-      }
-      
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-      
-      if (!inString) {
-        if (char === '{') {
-          if (braceCount === 0) {
-            startIndex = i;
+      // Process complete JSON objects from the buffer
+      while (true) {
+        const jsonStart = buffer.indexOf('{', lastProcessedIndex);
+        if (jsonStart === -1) break;
+        
+        let braceCount = 0;
+        let inString = false;
+        let escaped = false;
+        let jsonEnd = -1;
+        
+        for (let i = jsonStart; i < buffer.length; i++) {
+          const char = buffer[i];
+          
+          if (escaped) {
+            escaped = false;
+            continue;
           }
-          braceCount++;
-        } else if (char === '}') {
-          braceCount--;
-          if (braceCount === 0) {
-            // We found a complete JSON object
-            const jsonStr = buffer.substring(startIndex, i + 1);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              // console.log('=== Parsed complete JSON ===');
-              // console.log(JSON.stringify(parsed, null, 2));
-              
-              // Call the handler with the parsed data
-              handler(parsed);
-            } catch (e) {
-              console.log('Failed to parse complete JSON:', e.message);
+          
+          if (char === '\\' && inString) {
+            escaped = true;
+            continue;
+          }
+          
+          if (char === '"') {
+            inString = !inString;
+            continue;
+          }
+          
+          if (!inString) {
+            if (char === '{') {
+              braceCount++;
+            } else if (char === '}') {
+              braceCount--;
+              if (braceCount === 0) {
+                jsonEnd = i;
+                break;
+              }
             }
-            
-            // Remove the processed part from buffer
-            buffer = buffer.substring(i + 1);
-            i = -1; // Reset loop since we modified the buffer
-            startIndex = 0;
           }
         }
+        
+        if (jsonEnd === -1) {
+          // Incomplete JSON, wait for more data
+          break;
+        }
+        
+        const jsonStr = buffer.substring(jsonStart, jsonEnd + 1);
+        try {
+          const parsed = JSON.parse(jsonStr);
+          
+          // Call the handler immediately for real-time streaming
+          if (handler) {
+            handler(parsed);
+          }
+          
+        } catch (e) {
+          console.error('Failed to parse JSON chunk:', e.message);
+          console.error('Problematic JSON:', jsonStr);
+        }
+        
+        lastProcessedIndex = jsonEnd + 1;
       }
-    }
+      
+      // Clean up processed parts of buffer periodically
+      if (lastProcessedIndex > 1000) {
+        buffer = buffer.substring(lastProcessedIndex);
+        lastProcessedIndex = 0;
+      }
+    });
+
+    res.data.on('end', () => {
+      console.log(`Stream ended. Total chunks processed: ${chunkCount}`);
+    });
+
+    res.data.on('error', (error) => {
+      console.error('Stream error:', error);
+      throw error;
+    });
+
+    // Wait for the stream to complete
+    await new Promise((resolve, reject) => {
+      res.data.on('end', resolve);
+      res.data.on('error', reject);
+    });
+
+    return res;
+
+  } catch (error) {
+    console.error('Watson streaming error:', error.message);
+    throw error;
   }
-  
-  // console.log(`=== Stream processing complete. Total chunks: ${chunkCount} ===`);
-  return res;
 };
 
 module.exports = { watson };
