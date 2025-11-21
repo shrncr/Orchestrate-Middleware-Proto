@@ -19,7 +19,7 @@ function streamResponse(m) {
       })
       const response = await axios({
         method: 'post',
-        url: `${process.env.SERVER_URL}/api/generate`,
+        url: `http://localhost:3000/stream-hello`,
         responseType: 'stream',
         data: {
           conversation,
