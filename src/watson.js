@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { createParser } = require('eventsource-parser');
-// require("dotenv").config({ path: "../.env" });
+//require("dotenv").config();
+
 
 const watson = {};
 
@@ -19,112 +20,98 @@ watson.getAuthToken = async function () {
   return res.data.token;
 };
 
-watson.getThreadID = async function (service_url, agent_id, token) {
-  try {
-    let threadId = null;
-    let threadMessages = { data: { content: [] } };
+watson.getThreadID = async function (service_url, agent_id, token){
 
-    // Fetch most recent thread for this agent
-    const res = await axios.get(
+  let threadId;
+  let threadMessages;
+
+  const res = await axios.get(
+    `${service_url}/v1/orchestrate/threads`,
+    {
+      params: {  
+        "agent_id": agent_id,
+        "limit": 1
+      },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  )
+
+
+    // First item is always most recent thread with agent
+  if (res.data[0]) {
+    const updatedAt = new Date(res.data[0].updated_at);
+    const now = new Date();
+    const oneMinuteAgo = new Date(now.getTime() - 150 * 1000); // 120 seconds * 1000 ms
+    
+    if (updatedAt < oneMinuteAgo) {
+      // Thread is older than 1 minute - create new thread
+      const newThread = await axios.post(
+        `${service_url}/v1/orchestrate/threads`,
+          {
+            "agent_id": agent_id,
+          }, 
+          {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      )
+      threadId = newThread.data.thread_id;
+      threadMessages = {"data":{"content":[]}}
+      console.log('Thread is stale (>1 min old), creating new thread');
+    } else {
+      // Thread is recent (within last minute) - reuse it
+      threadId = res.data[0].id;
+      threadMessages = await axios.get(
+          `${service_url}/v1/orchestrate/threads/${threadId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        )
+      console.log('Reusing recent thread');
+      
+    }
+  } else {
+    // No threads exist - create new thread
+    console.log('No threads found, creating new thread');
+    const newThread = await axios.post(
       `${service_url}/v1/orchestrate/threads`,
       {
-        params: {
-          agent_id,
-          limit: 1
-        },
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    const threads = res.data?.data || [];
-    console.log("Threads returned:", threads);
-
-    // Case 1: No threads exist → create new thread
-    if (threads.length === 0) {
-      console.log("No threads found, creating new thread");
-
-      const newThread = await axios.post(
-        `${service_url}/v1/orchestrate/threads`,
-        { agent_id },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      threadId = newThread.data.thread_id;
-      return { threadId, threadMessages };
-    }
-
-    // First (and most recent) thread
-    const latestThread = threads[0];
-    const updatedAt = new Date(latestThread.updated_at || latestThread.updatedAt);
-    const now = new Date();
-    const cutoff = new Date(now.getTime() - 150 * 1000); // 150 seconds
-
-    if (updatedAt < cutoff) {
-      // Thread is stale → create a new one
-      console.log("Thread is stale (>150 sec), creating new thread");
-
-      const newThread = await axios.post(
-        `${service_url}/v1/orchestrate/threads`,
-        { agent_id },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      threadId = newThread.data.thread_id;
-      return { threadId, threadMessages };
-    }
-
-    // Thread is recent → reuse it
-    console.log("Reusing recent thread:", latestThread.id);
-
-    threadId = latestThread.id;
-
-    const msgRes = await axios.get(
-      `${service_url}/v1/orchestrate/threads/${threadId}`,
+        "agent_id": agent_id,
+      },
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
+          'Content-Type': 'application/json'
         }
       }
     );
-
-    threadMessages = msgRes.data;
-
-    return { threadId, threadMessages };
-
-  } catch (err) {
-    console.error("Error in getThreadID:", err.response?.data || err.message);
-    throw err;
+    threadId = newThread.data.thread_id;
+    threadMessages = {"data":{"content":[]}};
   }
-};
 
+  return {threadId, threadMessages}
+}
 
 // Step 2: Stream a message to the Orchestrate endpoint
 watson.streamMessage = async function (sessionId, messageInput, handler) {
   const token = await watson.getAuthToken();
-  const service_url =process.env.WO_SERVICE_URL;
+  const service_url = process.env.WO_SERVICE_URL;
   const agent_id = process.env.AGENT_ID;
 
   console.log("this is the token: " + token)
-
   const {threadId, threadMessages} = await watson.getThreadID(service_url, agent_id, token)
   let content = threadMessages.data.content
   try {
     const res = await axios.post(
-      `${service_url}/v1/orchestrate/runs/stream?stream_timeout=60000&multiple_content=FALSE`,
+      `${service_url}/v1/orchestrate/runs/stream`,
       { 
         "agent_id": agent_id,
         "version": 1,
