@@ -1,8 +1,7 @@
+require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
 const { watson } = require('./watson');
-
-var SESSION_ID_MAPPING = {};
  
 const app = express();
 const port = 3000;
@@ -14,38 +13,27 @@ app.get('/', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Stream endpoint as shown in the documentation
+// Stream endpoint for avatar service
 app.post("/stream-hello", authenticateBearerToken, async (req, res) => {
   console.log("/stream-hello endpoint called");
   await streamResponse(req, res);
 });
 
-// Your existing endpoints
-app.post("/api/generate/:avatarName", authenticateBearerToken, async (req, res) => {
-  console.log("/api/generate/:avatarName");
-  await generate(req, res);
-});
-
-app.post("/api/generate", authenticateBearerToken, async (req, res) => {
-  console.log("/api/generate");
-  await generate(req, res);
-});
-
 function authenticateBearerToken(req, res, next) {
-  // const authHeader = req.headers['authorization'];
-  // if (!authHeader || !authHeader.startsWith('Bearer ')) {
-  //   return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-  // }
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  }
 
-  // const token = authHeader.split(' ')[1];
-  // if (token !== process.env.ACCESS_TOKEN) {
-  //   return res.status(403).json({ error: 'Forbidden' });
-  // }
+  const token = authHeader.split(' ')[1];
+  if (token !== process.env.ACCESS_TOKEN) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   next();
 }
 
-// New streamResponse function specifically for avatar service
+// Stream response function for avatar service
 async function streamResponse(req, res) {
   const conversation = req.body.conversation ?? [];
   const session_id = req.body.session_id ?? "";
@@ -71,7 +59,7 @@ async function streamResponse(req, res) {
       return;
     }
 
-    // Set headers for streaming as per avatar service documentation
+    // Set headers for streaming
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Transfer-Encoding", "chunked");
     res.setHeader("Cache-Control", "no-cache");
@@ -88,13 +76,8 @@ async function streamResponse(req, res) {
           if (Array.isArray(deltaContent)) {
             for (const item of deltaContent) {
               if (item.response_type === 'text' && item.text) {
-                // Write each chunk immediately to the avatar service
                 res.write(item.text);
                 hasStreamedContent = true;
-                
-                // Optional: Add small delay to ensure proper chunking
-                // This can help with avatar synchronization
-                // setTimeout(() => {}, 10);
               }
             }
           }
@@ -108,7 +91,6 @@ async function streamResponse(req, res) {
           if (Array.isArray(messageContent)) {
             for (const item of messageContent) {
               if (item.response_type === 'text' && item.text) {
-                // Send the complete message if no streaming occurred
                 res.write(item.text);
               }
             }
@@ -117,7 +99,6 @@ async function streamResponse(req, res) {
       }
     });
 
-    // End the stream
     res.end();
 
   } catch (error) {
@@ -125,88 +106,8 @@ async function streamResponse(req, res) {
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
     } else {
-      // If headers already sent, just end the stream
       res.end();
     }
-  }
-}
-
-// Your existing generate function (kept for backward compatibility)
-async function generate(req, res) {
-  const avatarName = req.params?.avatarName ?? "";
-  const conversation = req.body.conversation ?? [];
-  const base64Image = req.body.base64Image ?? "";
-  var session_id = req.body.session_id ?? "";
-
-  try {
-    if (!session_id) {
-      res.status(400).json({ error: "Session ID cannot be blank" });
-      return;
-    }
-
-    const msg = conversation.at(-1);
-    if (!msg) {
-      res.status(400).json({ error: "Could not read last message in the conversation" });
-      return;
-    }
-    if (msg.role != "user") {
-      res.status(400).json({ error: "Last message in the conversation must be from the user" });
-      return;
-    }
-    const message = msg.content;
-    if (!message) {
-      res.status(400).json({ error: "Last message in the conversation must not be blank" });
-      return;
-    }
-
-    res.setHeader("Content-Type", "text/plain");
-
-    let response = "";
-    
-    await watson.streamMessage(session_id, message, function (data) {
-      // Handle message.delta events (streaming chunks)
-      if (data.event === 'message.delta') {
-        if (data.data?.delta?.content) {
-          const deltaContent = data.data.delta.content;
-          if (Array.isArray(deltaContent)) {
-            for (const item of deltaContent) {
-              if (item.response_type === 'text' && item.text) {
-                res.write(item.text);
-                response += item.text;
-              }
-            }
-          }
-        }
-      }
-      
-      // Handle message.created events (complete messages)
-      else if (data.event === 'message.created') {
-        if (data.data?.message?.content) {
-          const messageContent = data.data.message.content;
-          if (Array.isArray(messageContent)) {
-            for (const item of messageContent) {
-              if (item.response_type === 'text' && item.text) {
-                // Only write if this is different from what we've already streamed
-                if (item.text !== response) {
-                  if (response) {
-                    res.write('\n');
-                  }
-                  res.write(item.text);
-                  response = item.text;
-                } else {
-                  console.log('Skipping duplicate message');
-                }
-              }
-            }
-          }
-        }
-      }
-    });
-
-    res.end();
-  } catch (error) {
-    console.error(error, error.message);
-    res.status(500).json({ error: "Internal server error" });
   }
 }
 
