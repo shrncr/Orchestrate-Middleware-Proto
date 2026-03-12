@@ -111,6 +111,12 @@ async function streamResponse(req, res) {
   }
 }
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server listening at http://0.0.0.0:${port}`);
-});
+// Export for Vercel serverless
+module.exports = app;
+
+// Start server locally (not used in Vercel)
+if (require.main === module) {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Server listening at http://0.0.0.0:${port}`);
+  });
+}
