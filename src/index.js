@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
 const { watson } = require('./watson');
@@ -14,6 +15,7 @@ app.get('/', (req, res) => {
 });
 
 // Stream endpoint for avatar service
+// Stream endpoint for avatar service
 app.post("/stream-hello", authenticateBearerToken, async (req, res) => {
   console.log("/stream-hello endpoint called");
   await streamResponse(req, res);
@@ -24,7 +26,15 @@ function authenticateBearerToken(req, res, next) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or invalid Authorization header' });
   }
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  }
 
+  const token = authHeader.split(' ')[1];
+  if (token !== process.env.ACCESS_TOKEN) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const token = authHeader.split(' ')[1];
   if (token !== process.env.ACCESS_TOKEN) {
     return res.status(403).json({ error: 'Forbidden' });
@@ -33,6 +43,7 @@ function authenticateBearerToken(req, res, next) {
   next();
 }
 
+// Stream response function for avatar service
 // Stream response function for avatar service
 async function streamResponse(req, res) {
   const conversation = req.body.conversation ?? [];
@@ -59,6 +70,7 @@ async function streamResponse(req, res) {
       return;
     }
 
+    // Set headers for streaming
     // Set headers for streaming
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Transfer-Encoding", "chunked");
