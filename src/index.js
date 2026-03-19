@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json({ limit: "50mb", extended: true }));
 
 app.get('/', (req, res) => {
-  res.status(200).send('OK');
+  res.status(200).send('OK');   
 });
 
 // Stream endpoint as shown in the documentation

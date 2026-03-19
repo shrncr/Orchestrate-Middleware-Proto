@@ -7,7 +7,7 @@ const watson = {};
 
 // Step 1: Get JWT token from API key
 watson.getAuthToken = async function () {
-  const apikey = process.env.WO_APIKEY;
+  const apikey = process.env.WO_APIKEY;    
 
   const res = await axios.post(
     'https://iam.platform.saas.ibm.com/siusermgr/api/1.0/apikeys/token',
